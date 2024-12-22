@@ -1,11 +1,78 @@
 const { v4: uuidv4 } = require("uuid");
+const mongoose = require("mongoose");
 const Hashids = require("hashids");
 const URL = require("url").URL;
 const hashids = new Hashids();
 const { genJwtToken } = require("./jwt_helper");
 
 const re = /(\S+)\s+(\S+)/;
+const SALT_ROUNDS = 10;
 
+// MongoDB Connection
+const connectDB = async () => {
+  try {
+    const dbURI = "mongodb://localhost:27017/sso_server"; // Replace with your MongoDB URI
+    await mongoose.connect(dbURI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log("Connected to MongoDB successfully");
+  } catch (error) {
+    console.error("Error connecting to MongoDB:", error);
+    process.exit(1);
+  }
+};
+
+// mongodb schema
+const UserSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  userId: { type: String, required: true, unique: true },
+  appPolicy: {
+    type: Map,
+    of: new mongoose.Schema({
+      role: { type: String },
+      shareEmail: { type: Boolean },
+    }),
+  },
+});
+
+const User = mongoose.model("User", UserSchema);
+const registerUser = async (req, res) => {
+  const { email, password, appPolicy } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ message: "Missing required fields." });
+  }
+
+  try {
+    // Check if the user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User already exists." });
+    }
+
+
+    // Create a new user
+    const newUser = new User({
+      email,
+      password: password,
+      userId: encodedId(),
+      appPolicy: {
+        ...appPolicy,
+        simple_sso_consumer: { role: "user", shareEmail: false },
+        sso_consumer: { role: "admin", shareEmail: true },
+      }
+    });
+
+    await newUser.save();
+
+    return res.redirect("/simplesso/login");
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+};
 // Note: express http converts all headers
 // to lower case.
 const AUTH_HEADER = "authorization";
@@ -42,7 +109,7 @@ const appTokenFromRequest = fromAuthHeaderAsBearerToken();
 // app token to validate the request is coming from the authenticated server only.
 const appTokenDB = {
   sso_consumer: "l1Q7zkOL59cRqWBkQ12ZiGVW2DBL",
-  simple_sso_consumer: "1g0jJwGmRQhJwvwNOrY4i90kD0m",
+  simple_sso_consumer: "1g0jJwGmRQhJwvwNOrY4i90kD0m"
 };
 
 const alloweOrigin = {
@@ -94,15 +161,32 @@ const storeApplicationInCache = (origin, id, intrmToken) => {
   console.log({ ...sessionApp }, { ...sessionUser }, { intrmTokenCache });
 };
 
-const generatePayload = (ssoToken) => {
+const generatePayload = async (ssoToken) => {
   const globalSessionToken = intrmTokenCache[ssoToken][0];
   const appName = intrmTokenCache[ssoToken][1];
   const userEmail = sessionUser[globalSessionToken];
-  const user = userDB[userEmail];
-  const appPolicy = user.appPolicy[appName];
+  const user = await User.findOne({ email: userEmail });
+  const appPolicy = user.appPolicy.get(appName);
   const email = appPolicy.shareEmail === true ? userEmail : undefined;
+
+  const jsonObject = {
+    ...user,
+    _id: user._id.toString(), // Convert ObjectId to string
+    appPolicy: Object.fromEntries(user.appPolicy), // Convert Map to Object
+  };
+  
+  // Convert ObjectId within appPolicy
+  jsonObject.appPolicy = Object.entries(jsonObject.appPolicy).reduce((acc, [key, value]) => {
+    acc[key] = {
+      ...value,
+      _id: value._id.toString() // Convert nested ObjectId to string
+    };
+    return acc;
+  }, {});
+
+  const appPolicyObject = jsonObject["appPolicy"][appName]
   const payload = {
-    ...{ ...appPolicy },
+    ...{...appPolicyObject},
     ...{
       email,
       shareEmail: undefined,
@@ -115,6 +199,7 @@ const generatePayload = (ssoToken) => {
 };
 
 const verifySsoToken = async (req, res, next) => {
+
   const appToken = appTokenFromRequest(req);
   const { ssoToken } = req.query;
   // if the application token is not present or ssoToken request is invalid
@@ -139,20 +224,34 @@ const verifySsoToken = async (req, res, next) => {
     return res.status(403).json({ message: "Unauthorized" });
   }
   // checking if the token passed has been generated
-  const payload = generatePayload(ssoToken);
+  const payload = await generatePayload(ssoToken);
 
   const token = await genJwtToken(payload);
   // delete the itremCache key for no futher use,
   delete intrmTokenCache[ssoToken];
   return res.status(200).json({ token });
 };
-const doLogin = (req, res, next) => {
+const doLogin = async (req, res, next) => {
   // do the validation with email and password
   // but the goal is not to do the same in this right now,
   // like checking with Datebase and all, we are skiping these section
   const { email, password } = req.body;
-  if (!(userDB[email] && password === userDB[email].password)) {
-    return res.status(404).json({ message: "Invalid email and password" });
+  // if (!(userDB[email] && password === userDB[email].password)) {
+  //   return res.status(404).json({ message: "Invalid email and password" });
+  // }
+  if (!email || !password) {
+    return res.status(400).json({ message: "Missing required fields." });
+  }
+
+  // Check if the user already exists
+  const existingUser = await User.findOne({ email });
+  if (!existingUser) {
+    return res.status(400).json({ message: "User not found." });
+  }
+
+  const match = password == existingUser.password;
+  if (!match) {
+    return res.status(400).json({ message: "Invalid password." });
   }
 
   // else redirect
@@ -195,9 +294,9 @@ const login = (req, res, next) => {
     return res.redirect(`${serviceURL}?ssoToken=${intrmid}`);
   }
 
+
   return res.render("login", {
     title: "SSO-Server | Login",
   });
 };
-
-module.exports = Object.assign({}, { doLogin, login, verifySsoToken });
+module.exports = Object.assign({}, { doLogin, login, verifySsoToken, registerUser, connectDB });

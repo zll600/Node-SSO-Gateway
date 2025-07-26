@@ -4,7 +4,7 @@ const app = express();
 const engine = require("ejs-mate");
 const session = require("express-session");
 const cookieParser = require("cookie-parser");
-const MongoStore = require("connect-mongo");
+// const MongoStore = require("connect-mongo");
 
 const isAuthenticated = require("./isAuthenticated");
 const checkSSORedirect = require("./checkSSORedirect");

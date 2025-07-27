@@ -12,10 +12,7 @@ const SALT_ROUNDS = 10;
 const connectDB = async () => {
   try {
     const dbURI = "mongodb://localhost:27017/sso_server"; // Replace with your MongoDB URI
-    await mongoose.connect(dbURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
+    await mongoose.connect(dbURI);
     console.log("Connected to MongoDB successfully");
   } catch (error) {
     console.error("Error connecting to MongoDB:", error);

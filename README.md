@@ -217,3 +217,7 @@ To log out, the user needs to clear both their **local session** (in the consume
 
 This SSO system provides a secure and scalable method for managing user authentication across multiple consumer applications. By leveraging a centralized authentication server and token-based authentication, we can seamlessly integrate authentication across various systems while maintaining security and scalability.
 
+
+# Posts
+
+- https://dev.to/ravikishan/a-comprehensive-guide-to-building-a-single-sign-on-sso-gateway-with-nodejs-4lj4
